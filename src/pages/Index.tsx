@@ -1,9 +1,9 @@
-
 import Navbar from "@/components/Navbar";
 import Hero from "@/components/Hero";
 import Dashboard from "@/components/Dashboard";
 import FeatureSection from "@/components/FeatureSection";
 import Footer from "@/components/Footer";
+import ImageUpload from "@/components/ImageUpload";
 
 const Index = () => {
   return (
@@ -12,6 +12,9 @@ const Index = () => {
       <main>
         <section id="home">
           <Hero />
+        </section>
+        <section id="image-upload">
+          <ImageUpload />
         </section>
         <section id="dashboard">
           <Dashboard />

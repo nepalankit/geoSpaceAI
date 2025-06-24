@@ -17,8 +17,20 @@ dist-ssr
 !.vscode/extensions.json
 .idea
 .DS_Store
+# Ignore model files
+*.h5
+
+# Ignore virtual environments
+venv/
+
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+backend/venv/
+venv/
+best_models/
+best_model(1).h5
+best_model(2).h5
+best_model(3).h5

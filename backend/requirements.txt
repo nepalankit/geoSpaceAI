@@ -1,0 +1,7 @@
+flask
+tensorflow
+pillow
+flask-cors
+h5py
+scikit-image
+matplotlib
