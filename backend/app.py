@@ -414,7 +414,14 @@ def predict():
         red = rgb_array[:,:,0]
         # Simulate NIR using a combination of channels
         simulated_nir = (rgb_array[:,:,1] + rgb_array[:,:,2]) / 2  # Simple approximation
-        ndvi = (simulated_nir - red) / (simulated_nir + red + 1e-6)  # Avoid division by zero
+        
+        # Calculate NDVI with proper handling of potential NaN values
+        ndvi = np.divide(simulated_nir - red, simulated_nir + red + 1e-6)  # Avoid division by zero
+        
+        # Handle any NaN values that might occur
+        ndvi = np.nan_to_num(ndvi, nan=0.0)
+        
+        # Normalize for display
         ndvi_disp = (ndvi - ndvi.min()) / (ndvi.max() - ndvi.min() + 1e-6)
         
         # Step 3: Generate Slope (simulated from image gradients)
@@ -433,17 +440,29 @@ def predict():
         # Create a 6-channel input array for the model
         six_channel_array = np.zeros((IMG_SIZE[0], IMG_SIZE[1], CHANNELS))
         
-        # First 3 channels: RGB
-        six_channel_array[:,:,0:3] = rgb_array
+        # Match the channel order used in training (from Landslide_detection.ipynb)
+        # In training: RED, GREEN, BLUE, NDVI, SLOPE, ELEVATION with 1 - normalization for RGB/SLOPE/ELEVATION
+        mid_rgb = np.max(rgb_array) / 2.0  # Similar to training normalization
+        mid_slope = np.max(slope_disp) / 2.0
+        mid_dem = np.max(dem_disp) / 2.0
         
-        # Channel 4: NDVI
+        # Channel 0: RED (inverted as in training)
+        six_channel_array[:,:,0] = 1 - rgb_array[:,:,0] / mid_rgb
+        
+        # Channel 1: GREEN (inverted as in training)
+        six_channel_array[:,:,1] = 1 - rgb_array[:,:,1] / mid_rgb
+        
+        # Channel 2: BLUE (inverted as in training)
+        six_channel_array[:,:,2] = 1 - rgb_array[:,:,2] / mid_rgb
+        
+        # Channel 3: NDVI
         six_channel_array[:,:,3] = ndvi_disp
         
-        # Channel 5: Slope
-        six_channel_array[:,:,4] = slope_disp
+        # Channel 4: SLOPE (inverted as in training)
+        six_channel_array[:,:,4] = 1 - slope_disp / mid_slope
         
-        # Channel 6: DEM
-        six_channel_array[:,:,5] = dem_disp
+        # Channel 5: DEM (inverted as in training)
+        six_channel_array[:,:,5] = 1 - dem_disp / mid_dem
         
         # Add batch dimension
         input_array = np.expand_dims(six_channel_array, axis=0)
@@ -732,6 +751,8 @@ def predict_h5():
             nir = data[:, :, CHANNEL_INDEX["NIR"]].astype(np.float32)
             red = data[:, :, CHANNEL_INDEX["Red"]].astype(np.float32)
             ndvi = (nir - red) / (nir + red + 1e-6)
+            # Handle any potential NaN values
+            ndvi = np.nan_to_num(ndvi, nan=0.0)
             ndvi_disp = (ndvi - ndvi.min()) / (ndvi.max() - ndvi.min() + 1e-6)
             
             # Step 3: Extract Slope
@@ -757,17 +778,29 @@ def predict_h5():
         # Resize the RGB data to match the model's expected input size
         resized_rgb = resize_img(rgb_data)
         
-        # First 3 channels: RGB
-        six_channel_array[:,:,0:3] = resized_rgb / 255.0  # Normalize RGB channels
+        # Match the channel order used in training (from Landslide_detection.ipynb)
+        # In training: RED, GREEN, BLUE, NDVI, SLOPE, ELEVATION with 1 - normalization for RGB/SLOPE/ELEVATION
+        mid_rgb = np.max(resized_rgb) / 2.0  # Similar to training normalization
+        mid_slope = np.max(slope_disp) / 2.0
+        mid_dem = np.max(elevation_disp) / 2.0
         
-        # Channel 4: NDVI
+        # Channel 0: RED (inverted as in training)
+        six_channel_array[:,:,0] = 1 - resized_rgb[:,:,0] / mid_rgb
+        
+        # Channel 1: GREEN (inverted as in training)
+        six_channel_array[:,:,1] = 1 - resized_rgb[:,:,1] / mid_rgb
+        
+        # Channel 2: BLUE (inverted as in training)
+        six_channel_array[:,:,2] = 1 - resized_rgb[:,:,2] / mid_rgb
+        
+        # Channel 3: NDVI
         six_channel_array[:,:,3] = resize_img(ndvi_disp)
         
-        # Channel 5: Slope
-        six_channel_array[:,:,4] = resize_img(slope_disp)
+        # Channel 4: SLOPE (inverted as in training)
+        six_channel_array[:,:,4] = 1 - resize_img(slope_disp) / mid_slope
         
-        # Channel 6: Elevation
-        six_channel_array[:,:,5] = resize_img(elevation_disp)
+        # Channel 5: DEM (inverted as in training)
+        six_channel_array[:,:,5] = 1 - resize_img(elevation_disp) / mid_dem
         
         # Add batch dimension
         input_array = np.expand_dims(six_channel_array, axis=0)
