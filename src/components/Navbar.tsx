@@ -66,6 +66,12 @@ const Navbar = () => {
           >
             Features
           </a>
+          <Link 
+            to="/flood-detection" 
+            className="text-sm font-medium hover:text-primary transition-colors"
+          >
+            Flood Detection
+          </Link>
           <a 
             href="#about" 
             className="text-sm font-medium hover:text-primary transition-colors"
@@ -132,6 +138,13 @@ const Navbar = () => {
           >
             Features
           </a>
+          <Link 
+            to="/flood-detection" 
+            className="text-sm font-medium hover:text-primary transition-colors py-2"
+            onClick={() => setIsMobileMenuOpen(false)}
+          >
+            Flood Detection
+          </Link>
           <a 
             href="#about" 
             className="text-sm font-medium hover:text-primary transition-colors py-2"

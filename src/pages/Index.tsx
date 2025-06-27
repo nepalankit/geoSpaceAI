@@ -4,6 +4,7 @@ import Dashboard from "@/components/Dashboard";
 import FeatureSection from "@/components/FeatureSection";
 import Footer from "@/components/Footer";
 import ImageUpload from "@/components/ImageUpload";
+import { Link } from "react-router-dom";
 
 const Index = () => {
   return (
@@ -14,7 +15,26 @@ const Index = () => {
           <Hero />
         </section>
         <section id="image-upload">
-          <ImageUpload />
+          <div className="container mx-auto px-4 py-8">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              <div>
+                <h2 className="text-2xl font-bold mb-4 text-center">Landslide Detection</h2>
+                <ImageUpload />
+              </div>
+              <div>
+                <h2 className="text-2xl font-bold mb-4 text-center">Flood Detection</h2>
+                <div className="p-6 bg-white rounded-lg shadow-md">
+                  <p className="text-center text-gray-600 mb-4">Try our dedicated flood detection tool with advanced visualization and analysis features.</p>
+                  <Link to="/flood-detection" className="block w-full py-2 px-4 bg-blue-600 text-white text-center rounded hover:bg-blue-700 transition-colors">
+                    Go to Flood Detection
+                  </Link>
+                  <div className="mt-4 p-4 bg-blue-50 rounded-md">
+                    <p className="text-sm text-blue-800">Our flood detection model uses a U-Net architecture to identify flooded areas in satellite or aerial imagery with high accuracy.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         </section>
         <section id="dashboard">
           <Dashboard />

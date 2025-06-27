@@ -22,6 +22,9 @@ from skimage.filters import threshold_otsu
 from skimage.morphology import remove_small_objects, remove_small_holes
 from skimage.transform import resize
 
+# Import flood prediction module
+from flood_prediction import predict_flood, load_flood_model
+
 def generate_segmentation_visualization(original_data, prediction):
     """
     Generate a visualization of the multi-channel segmentation results.
@@ -159,29 +162,35 @@ def generate_segmentation_visualization(original_data, prediction):
                 print(f"Visualization - prob_mask stats: min={np.min(prob_mask)}, max={np.max(prob_mask)}, mean={np.mean(prob_mask)}")
                 print(f"Visualization - prob_mask_smooth stats: min={np.min(prob_mask_smooth)}, max={np.max(prob_mask_smooth)}, mean={np.mean(prob_mask_smooth)}")
                 
-                # Use a lower threshold if the prediction values are very low
-                if np.max(prob_mask_smooth) < 0.3:
-                    print("Using lower threshold for visualization due to low prediction values")
-                    thresh = 0.1
-                else:
-                    try:
-                        # Try to use Otsu's method first
-                        thresh = threshold_otsu(prob_mask_smooth)
-                        # If threshold is too high (resulting in very few segmented pixels), lower it
-                        if np.mean(prob_mask_smooth > thresh) < 0.01:  # If less than 1% of pixels are segmented
-                            thresh = np.percentile(prob_mask_smooth, 90)  # Use 90th percentile instead
-                    except:
-                        # Fallback threshold
-                        thresh = np.percentile(prob_mask_smooth, 85)  # Use 85th percentile
+                # Use a moderate threshold for visualization that balances visibility with accuracy
+                print("Using moderate threshold for visualization to reduce false positives")
+                thresh = 0.1  # Moderate threshold to balance visibility with accuracy
+                
+                # If the prediction values are very high, use a higher threshold for better accuracy
+                if np.max(prob_mask_smooth) > 0.5:
+                    thresh = 0.15  # Higher threshold for stronger signals
                 
                 print(f"Visualization - using threshold: {thresh}")
                 
                 # Create binary mask
                 binary_mask = (prob_mask_smooth > thresh).astype(np.uint8)
                 
-                # Apply morphological operations to clean up the mask
-                binary_mask = remove_small_objects(binary_mask.astype(bool), min_size=50)
-                binary_mask = remove_small_holes(binary_mask, area_threshold=50)
+                # Apply morphological operations to clean up and enhance the mask
+                from scipy.ndimage import binary_dilation, binary_closing
+                
+                # First close small gaps
+                binary_mask = binary_closing(binary_mask.astype(bool), structure=np.ones((3,3))).astype(bool)
+                
+                # Then remove small objects and holes
+                binary_mask = remove_small_objects(binary_mask, min_size=5)
+                binary_mask = remove_small_holes(binary_mask, area_threshold=5)
+                
+                # Finally dilate to make features more visible
+                binary_mask = binary_dilation(binary_mask, iterations=3).astype(np.uint8)
+                
+                # Print detailed mask statistics for debugging
+                print(f"Visualization mask - sum: {np.sum(binary_mask)}, unique values: {np.unique(binary_mask)}")
+                print(f"Mask percentage: {np.sum(binary_mask)/(binary_mask.shape[0]*binary_mask.shape[1])*100:.2f}% of image")
                 
                 print(f"Visualization - binary_mask stats: sum={np.sum(binary_mask)}, unique values={np.unique(binary_mask)}")
                 
@@ -208,10 +217,10 @@ def generate_segmentation_visualization(original_data, prediction):
                     plt.colorbar(plt.cm.ScalarMappable(norm=plt.Normalize(0, np.max(prob_mask_smooth) or 1), 
                                                       cmap=prob_cmap), cax=cax)
                 else:
-                    # Display the binary mask with a custom colormap
+                    # Display the binary mask with a black and white colormap to match the example
                     from matplotlib.colors import ListedColormap
-                    custom_cmap = ListedColormap(['#2D004B', '#FFFF00'])  # Purple background, yellow segmented areas
-                    plt.imshow(binary_mask, cmap=custom_cmap, vmin=0, vmax=1)
+                    bw_cmap = ListedColormap(['black', 'white'])  # Black background, white landslide areas
+                    plt.imshow(binary_mask, cmap=bw_cmap, vmin=0, vmax=1)
                     
                     # Add a title that indicates this is the segmentation result
                     plt.title('Segmentation Result')
@@ -219,7 +228,14 @@ def generate_segmentation_visualization(original_data, prediction):
                     # Add a colorbar for reference
                     divider = make_axes_locatable(plt.gca())
                     cax = divider.append_axes("right", size="5%", pad=0.05)
-                    plt.colorbar(plt.cm.ScalarMappable(norm=plt.Normalize(0, 1), cmap=custom_cmap), cax=cax)
+                    plt.colorbar(plt.cm.ScalarMappable(norm=plt.Normalize(0, 1), cmap=bw_cmap), cax=cax)
+                    
+                    # Add text to explain the visualization
+                    if np.sum(binary_mask) > 0:
+                        plt.text(0.5, 0.05, f'Landslide detected ({np.sum(binary_mask)} pixels)', 
+                                 horizontalalignment='center', verticalalignment='center',
+                                 transform=plt.gca().transAxes, color='white', fontsize=10,
+                                 bbox=dict(facecolor='black', alpha=0.5))
                 
             except Exception as viz_error:
                 print(f"Error creating binary mask visualization: {str(viz_error)}")
@@ -304,15 +320,46 @@ def to_base64(img, cmap=None, title=None):
     # Handle different image types
     if img.ndim == 2:
         # For 2D arrays (grayscale/masks)
-        # Normalize if needed
-        if img.max() > 0:
-            # Use vmin/vmax to ensure proper contrast
-            plt.imshow(img, cmap=cmap or 'viridis', vmin=0, vmax=img.max())
+        # For mask, use black and white colormap with fixed range
+        if title and ('Mask' in title or 'Prediction' in title):
+            # For mask, use black and white colormap with fixed range
+            if 'Mask' in title:
+                # Ensure binary values (0 and 1)
+                if img.max() > 0:
+                    # Normalize to 0-1 range if not already
+                    if img.max() > 1:
+                        img = img / img.max()
+                    # Show strictly binary mask
+                    binary_img = (img > 0).astype(float)
+                    from matplotlib.colors import ListedColormap
+                    bw_cmap = ListedColormap(['black', 'white'])
+                    plt.imshow(binary_img, cmap=bw_cmap, vmin=0, vmax=1)
+                else:
+                    plt.imshow(np.zeros_like(img), cmap='gray')
+                    plt.text(0.5, 0.5, 'No landslide detected', horizontalalignment='center', 
+                             verticalalignment='center', transform=plt.gca().transAxes, color='white')
+            # For prediction, overlay the mask on the original image for clarity
+            elif 'Prediction' in title:
+                # If original image is available, overlay
+                if img.max() > 0:
+                    # Normalize mask
+                    if img.max() > 1:
+                        img = img / img.max()
+                    # Use a strong colormap for mask overlay
+                    plt.imshow(img, cmap='inferno', vmin=0, vmax=1, alpha=0.9)
+                else:
+                    plt.imshow(np.zeros_like(img), cmap='gray')
+                    plt.text(0.5, 0.5, 'No landslide predicted', horizontalalignment='center', verticalalignment='center', transform=plt.gca().transAxes, color='white')
         else:
-            # If image is all zeros, still display it
-            plt.imshow(np.zeros_like(img), cmap=cmap or 'viridis')
-            plt.text(0.5, 0.5, 'No data', horizontalalignment='center', 
-                     verticalalignment='center', transform=plt.gca().transAxes)
+            # For other 2D arrays (like NDVI, slope, etc.)
+            if img.max() > 0:
+                # Use vmin/vmax to ensure proper contrast
+                plt.imshow(img, cmap=cmap or 'viridis', vmin=0, vmax=img.max())
+            else:
+                # If image is all zeros, still display it
+                plt.imshow(np.zeros_like(img), cmap=cmap or 'viridis')
+                plt.text(0.5, 0.5, 'No data', horizontalalignment='center', 
+                         verticalalignment='center', transform=plt.gca().transAxes)
     elif img.ndim == 3 and img.shape[2] == 3:
         # For RGB images
         # Ensure values are in [0, 1] range
@@ -428,20 +475,32 @@ def predict():
                 mask = np.clip((mask - p_min) / (p_max - p_min), 0, 1)
             print("After enhancement - min:", np.min(mask), "max:", np.max(mask), "mean:", np.mean(mask))
         
-        # Use an adaptive threshold based on the prediction values
-        if np.max(mask) < 0.3:
-            threshold = 0.05  # Very low threshold for weak predictions
-        else:
-            threshold = 0.3   # Standard threshold for stronger predictions
-            
+        # Use a higher threshold to reduce false positives on non-landslide images
+        # For actual prediction (not just visualization)
+        # 1. Lower threshold to catch weaker segments
+        threshold = 0.1  # Lower threshold for landslide segmentation
         print(f"Using threshold: {threshold}")
-        
+        print(f"Raw mask stats: min={np.min(mask)}, max={np.max(mask)}, mean={np.mean(mask)}, std={np.std(mask)}")
         binary_mask = (mask > threshold).astype(np.uint8)
 
-        # (Optional) Clean up the mask
-        binary_mask = remove_small_objects(binary_mask.astype(bool), min_size=50)
-        binary_mask = remove_small_holes(binary_mask, area_threshold=50)
-        processed_mask = binary_mask.astype(float)
+        # 2. (TEMP) Disable small object and hole removal for debugging
+        # binary_mask = remove_small_objects(binary_mask.astype(bool), min_size=30)  # Remove smaller objects
+        # binary_mask = remove_small_holes(binary_mask, area_threshold=30)  # Remove smaller holes
+
+        # 3. Apply limited morphological closing to connect close regions, but avoid over-expansion
+        from scipy.ndimage import binary_closing, label
+        binary_mask = binary_closing(binary_mask, structure=np.ones((3,3)), iterations=1)
+        binary_mask = binary_mask.astype(np.uint8)
+
+        # 4. Use connected component labeling to highlight segments
+        labeled_mask, num_features = label(binary_mask)
+        print(f"Number of landslide segments detected: {num_features}")
+        # For visualization: strictly binary (0 for background, 1 for landslide area)
+        processed_mask = (labeled_mask > 0).astype(float)
+
+        # Print detailed mask statistics for debugging
+        print(f"Processed mask - sum: {np.sum(processed_mask)}, unique values: {np.unique(processed_mask)}")
+        print(f"Mask percentage: {np.sum(processed_mask)/(processed_mask.shape[0]*processed_mask.shape[1])*100:.2f}% of image")
         
         # Print final binary mask statistics
         print(f"Binary mask stats - sum: {np.sum(binary_mask)}, unique values: {np.unique(binary_mask)}")
@@ -457,21 +516,26 @@ def predict():
         # Step 6: Final Prediction
         # Calculate confidence as mean probability of segmented class
         # If the mask has any positive values, use their mean as confidence
-        if np.sum(mask > 0.05) > 0:
-            confidence = float(np.mean(mask[mask > 0.05]))
+        if np.sum(mask > 0.25) > 0:  # Higher threshold for confidence calculation
+            confidence = float(np.mean(mask[mask > 0.25]))
         else:
             confidence = float(np.mean(mask))
             
-        # Adjust result text based on confidence and mask content
-        if np.sum(processed_mask) > 10:  # If we have a reasonable number of positive pixels
+        # Calculate percentage of image covered by the mask
+        mask_percentage = np.sum(processed_mask) / (processed_mask.shape[0] * processed_mask.shape[1])
+        
+        # Adjust result text based on confidence, mask content, and coverage percentage
+        # More stringent criteria for landslide detection
+        if np.sum(processed_mask) > 50 and confidence > 0.35:  # More pixels required and higher confidence
             result = 'segmented area detected'
         else:
-            # Check if there are any areas with moderate probability
-            if np.sum(mask > 0.1) > 10:
+            # Check if there are any areas with high probability
+            if np.sum(mask > 0.3) > 20:  # Higher threshold and more pixels
                 result = 'potential segmented area detected (low confidence)'
                 confidence = max(confidence, 0.3)  # Ensure minimum confidence for UI
             else:
                 result = 'no segmented area detected'
+                confidence = min(confidence, 0.2)  # Lower confidence for negative results
                 
         print(f"Final result: {result}, confidence: {confidence}")
         
@@ -482,8 +546,8 @@ def predict():
         # Use custom colormaps for better visualization
         from matplotlib.colors import LinearSegmentedColormap
         
-        # Create a custom colormap for the mask (black and yellow)
-        mask_cmap = LinearSegmentedColormap.from_list('mask_cmap', ['black', 'yellow'])
+        # Create a custom colormap for the mask (black and white)
+        mask_cmap = LinearSegmentedColormap.from_list('mask_cmap', ['black', 'white'])
         
         # Create a custom colormap for the prediction (purple to yellow)
         pred_cmap = LinearSegmentedColormap.from_list('pred_cmap', ['#2D004B', '#FFFF00'])
@@ -497,26 +561,97 @@ def predict():
             # Use raw prediction values if binary mask is empty
             mask_disp = mask
         
+        # Ensure the mask and prediction have visible values
+        # For binary mask, use white for landslide areas
+        binary_mask_display = binary_mask.astype(float)
+        
+        # For prediction, use the raw probability values with a colormap
+        prediction_display = mask
+        
         result_images = {
             'rgb': to_base64(rgb_disp, title="RGB Image"),
             'ndvi': to_base64(ndvi_disp, cmap='RdYlGn', title="NDVI"),
             'slope': to_base64(slope_disp, cmap='viridis', title="Slope"),
             'elevation': to_base64(dem_disp, cmap='viridis', title="DEM"),
-            'mask': to_base64(mask_disp, cmap=mask_cmap, title="Mask"),
-            'prediction': to_base64(mask, cmap=pred_cmap, title="Prediction")
+            'mask': to_base64(binary_mask_display, cmap=mask_cmap, title="Mask"),
+            'prediction': to_base64(prediction_display, cmap=pred_cmap, title="Prediction")
         }
         
         # Generate segmentation visualization
-        mask_visualization = generate_segmentation_visualization(img_array, prediction)
+        try:
+            # Generate the full visualization with multiple panels
+            full_visualization = generate_segmentation_visualization(img_array, prediction)
+            
+            # Generate a simple black and white mask visualization showing only the landslide segments
+            # Create a figure with just the binary mask
+            plt.figure(figsize=(5, 5))
+            
+            # Create binary mask from prediction
+            if len(prediction.shape) == 4:  # Batch, height, width, channels
+                mask_for_viz = prediction[0, :, :, 0]  # Take first batch item, first channel
+            elif len(prediction.shape) == 3 and prediction.shape[2] > 1:  # Multi-class
+                mask_for_viz = prediction[:, :, 0]  # Take first channel
+            else:  # Binary segmentation
+                mask_for_viz = prediction.squeeze()
+            
+            # Apply threshold to create binary mask
+            binary_mask_viz = (mask_for_viz > 0.15).astype(np.uint8)  # Use same threshold as in prediction
+            
+            # Apply morphological operations to clean up the mask
+            from scipy.ndimage import binary_closing, binary_dilation
+            binary_mask_viz = binary_closing(binary_mask_viz.astype(bool), structure=np.ones((3,3))).astype(bool)
+            binary_mask_viz = remove_small_objects(binary_mask_viz, min_size=5)
+            binary_mask_viz = remove_small_holes(binary_mask_viz, area_threshold=5)
+            binary_mask_viz = binary_dilation(binary_mask_viz, iterations=2).astype(np.uint8)
+            
+            # Create a black and white colormap
+            from matplotlib.colors import ListedColormap
+            bw_cmap = ListedColormap(['black', 'white'])  # Black background, white landslide areas
+            
+            # Display the binary mask with black background and white landslide areas
+            plt.imshow(binary_mask_viz, cmap=bw_cmap, vmin=0, vmax=1)
+            plt.axis('off')  # Turn off axis
+            
+            # Remove all margins and padding
+            plt.subplots_adjust(top=1, bottom=0, right=1, left=0, hspace=0, wspace=0)
+            plt.margins(0,0)
+            plt.gca().xaxis.set_major_locator(plt.NullLocator())
+            plt.gca().yaxis.set_major_locator(plt.NullLocator())
+            
+            # Save the binary mask visualization to a base64 string
+            buffer = BytesIO()
+            plt.savefig(buffer, format='png', bbox_inches='tight', pad_inches=0)
+            buffer.seek(0)
+            binary_mask_visualization = base64.b64encode(buffer.getvalue()).decode('utf-8')
+            plt.close()
+            
+            # Use the binary mask visualization as the segmentation image
+            mask_visualization = binary_mask_visualization
+        except Exception as viz_error:
+            print(f"Error generating visualization: {str(viz_error)}")
+            mask_visualization = None
         
         print("Prediction stats - min:", np.min(mask), "max:", np.max(mask), "mean:", np.mean(mask))
         
-        return jsonify({
+        # Prepare the response with clear indication for non-landslide images
+        response_data = {
             'result': result, 
             'confidence': confidence,
             'segmentation_image': mask_visualization,
-            'result_images': result_images
-        })
+            'result_images': result_images,
+            'is_landslide': result == 'segmented area detected',  # Boolean flag for frontend
+            'message': ''
+        }
+        
+        # Add a clear message for non-landslide images
+        if result == 'no segmented area detected':
+            response_data['message'] = 'No landslide detected in this image.'
+        elif 'low confidence' in result:
+            response_data['message'] = 'Potential landslide detected with low confidence. Please verify.'
+        else:
+            response_data['message'] = 'Landslide detected in this image.'
+            
+        return jsonify(response_data)
     except Exception as e:
         import traceback
         error_traceback = traceback.format_exc()
@@ -650,36 +785,131 @@ def predict_h5():
         else:
             mask = prediction.squeeze()
 
-        # Use a fixed threshold of 0.3, just like your notebook
-        binary_mask = (mask > 0.3).astype(np.uint8)
+        # Use a higher threshold to reduce false positives on non-landslide images
+        # For actual prediction (not just visualization)
+        threshold = 0.25  # Higher threshold to only show confident landslide areas
+        print(f"Using threshold: {threshold}")
+        
+        binary_mask = (mask > threshold).astype(np.uint8)
 
-        # (Optional) Clean up the mask
-        binary_mask = remove_small_objects(binary_mask.astype(bool), min_size=50)
-        binary_mask = remove_small_holes(binary_mask, area_threshold=50)
+        # Apply morphological operations to clean up and enhance the mask
+        from scipy.ndimage import binary_dilation, binary_closing
+        
+        # First close small gaps
+        binary_mask = binary_closing(binary_mask.astype(bool), structure=np.ones((3,3))).astype(bool)
+        
+        # Then remove small objects and holes
+        binary_mask = remove_small_objects(binary_mask, min_size=5)
+        binary_mask = remove_small_holes(binary_mask, area_threshold=5)
+        
+        # Finally dilate to make features more visible
+        binary_mask = binary_dilation(binary_mask, iterations=3).astype(np.uint8)
         processed_mask = binary_mask.astype(float)
+        
+        # Print detailed mask statistics for debugging
+        print(f"Processed mask - sum: {np.sum(processed_mask)}, unique values: {np.unique(processed_mask)}")
+        print(f"Mask percentage: {np.sum(processed_mask)/(processed_mask.shape[0]*processed_mask.shape[1])*100:.2f}% of image")
 
         # For visualization, use the binary mask for both 'mask' and 'prediction'
         mask_disp = processed_mask
 
         # Step 6: Final Prediction
-        # Calculate confidence based on prediction format
-        confidence = float(np.mean(mask))
-        result = 'segmented area detected' if confidence > 0.5 else 'no segmented area detected'
+        # Calculate confidence as mean probability of segmented class
+        # If the mask has any positive values, use their mean as confidence
+        if np.sum(mask > 0.2) > 0:  # Higher threshold for confidence calculation
+            confidence = float(np.mean(mask[mask > 0.2]))
+        else:
+            confidence = float(np.mean(mask))
+            
+        # Calculate percentage of image covered by the mask
+        mask_percentage = np.sum(processed_mask) / (processed_mask.shape[0] * processed_mask.shape[1])
+        
+        # Adjust result text based on confidence, mask content, and coverage percentage
+        # More stringent criteria for landslide detection
+        if np.sum(processed_mask) > 50 and confidence > 0.3:  # More pixels required and higher confidence
+            result = 'segmented area detected'
+        else:
+            # Check if there are any areas with high probability
+            if np.sum(mask > 0.25) > 20:  # Higher threshold and more pixels
+                result = 'potential segmented area detected (low confidence)'
+                confidence = max(confidence, 0.3)  # Ensure minimum confidence for UI
+            else:
+                result = 'no segmented area detected'
+                confidence = min(confidence, 0.2)  # Lower confidence for negative results
+                
+        print(f"Final result: {result}, confidence: {confidence}")
         
         # Create custom colormap for mask visualization
-        # Use 'gray' colormap for both mask and prediction
+        from matplotlib.colors import LinearSegmentedColormap
+        
+        # Create a custom colormap for the mask (black and white)
+        mask_cmap = LinearSegmentedColormap.from_list('mask_cmap', ['black', 'white'])
+        
+        # Create a custom colormap for the prediction (purple to yellow)
+        pred_cmap = LinearSegmentedColormap.from_list('pred_cmap', ['#2D004B', '#FFFF00'])
+        
+        # Ensure the mask and prediction have visible values
+        # For binary mask, use white for landslide areas
+        binary_mask_display = binary_mask.astype(float)
+        
+        # For prediction, use the raw probability values with a colormap
+        prediction_display = mask
+        
         result_images = {
             'rgb': to_base64(rgb_disp, title="RGB Image"),
             'ndvi': to_base64(ndvi_disp, cmap='RdYlGn', title="NDVI"),
             'slope': to_base64(slope_disp, cmap='viridis', title="Slope"),
             'elevation': to_base64(elevation_disp, cmap='viridis', title="DEM"),
-            'mask': to_base64(mask_disp, cmap='gray', title="Mask"),
-            'prediction': to_base64(mask_disp, cmap='gray', title="Prediction")
+            'mask': to_base64(binary_mask_display, cmap=mask_cmap, title="Mask"),
+            'prediction': to_base64(prediction_display, cmap=pred_cmap, title="Prediction")
         }
         
         # Generate segmentation visualization
         try:
-            mask_visualization = generate_segmentation_visualization(original_data, prediction)
+            # Create a figure with just the binary mask - showing ONLY landslide areas
+            plt.figure(figsize=(5, 5))
+            
+            # Create binary mask from prediction
+            if len(prediction.shape) == 4:  # Batch, height, width, channels
+                mask = prediction[0, :, :, 0]  # Take first batch item, first channel
+            elif len(prediction.shape) == 3 and prediction.shape[2] > 1:  # Multi-class
+                mask = prediction[:, :, 0]  # Take first channel
+            else:  # Binary segmentation
+                mask = prediction.squeeze()
+            
+            # Apply threshold to create binary mask - use higher threshold to only show confident landslide areas
+            binary_mask = (mask > 0.25).astype(np.uint8)  # Higher threshold to only show confident landslide areas
+            
+            # Apply morphological operations to clean up the mask
+            from scipy.ndimage import binary_closing, binary_dilation
+            binary_mask = binary_closing(binary_mask.astype(bool), structure=np.ones((3,3))).astype(bool)
+            binary_mask = remove_small_objects(binary_mask, min_size=10)  # Remove smaller objects
+            binary_mask = remove_small_holes(binary_mask, area_threshold=10)  # Remove smaller holes
+            binary_mask = binary_dilation(binary_mask, iterations=1).astype(np.uint8)  # Less dilation to avoid over-expansion
+            
+            # Create a black and white colormap
+            from matplotlib.colors import ListedColormap
+            bw_cmap = ListedColormap(['black', 'white'])  # Black background, white landslide areas
+            
+            # Display the binary mask with black background and white landslide areas
+            plt.imshow(binary_mask, cmap=bw_cmap, vmin=0, vmax=1)
+            plt.axis('off')  # Turn off axis
+            
+            # Remove all margins and padding
+            plt.subplots_adjust(top=1, bottom=0, right=1, left=0, hspace=0, wspace=0)
+            plt.margins(0,0)
+            plt.gca().xaxis.set_major_locator(plt.NullLocator())
+            plt.gca().yaxis.set_major_locator(plt.NullLocator())
+            
+            # Save the binary mask visualization to a base64 string
+            buffer = BytesIO()
+            plt.savefig(buffer, format='png', bbox_inches='tight', pad_inches=0)
+            buffer.seek(0)
+            binary_mask_visualization = base64.b64encode(buffer.getvalue()).decode('utf-8')
+            plt.close()
+            
+            # Use the binary mask visualization as the segmentation image
+            mask_visualization = binary_mask_visualization
         except Exception as viz_error:
             print(f"Error generating visualization: {str(viz_error)}")
             mask_visualization = None
@@ -699,5 +929,12 @@ def predict_h5():
         print(f"Traceback: {error_traceback}")
         return jsonify({'error': str(e), 'details': error_traceback}), 500
 
+# Add flood prediction endpoint
+@app.route('/predict_flood', methods=['POST'])
+def flood_prediction_endpoint():
+    return predict_flood()
+
 if __name__ == '__main__':
+    # Load flood model on startup
+    flood_model = load_flood_model()
     app.run(host='0.0.0.0', port=5001, debug=True)
